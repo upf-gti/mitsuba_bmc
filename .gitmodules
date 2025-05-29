@@ -1,0 +1,3 @@
+[submodule "src/integrators/bmc/GPRender"]
+	path = src/integrators/bmc/GPRender
+	url = https://github.com/upf-gti/GPRender
