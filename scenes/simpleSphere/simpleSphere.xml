@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<scene version="0.6.0">
+	<integrator type="bmc"> <!-- "bmc"> --> <!-- "path"> -->
+		<rgb name="color" value="0.0, 0.0, 0.0"/>
+		<integer name="maxDepth" value="2"/>
+	</integrator>
+	
+	<sensor type="perspective">
+		<transform name="toWorld">
+			<lookAt origin="0, 0, -3" target="0, 0, 0" up="0, 1, 0"/>
+		</transform>
+		<float name="fov" value="60"/>
+		<string name="fovAxis" value="y"/>
+
+		<sampler type="independent"> <!-- TODO: locate the sample at the middle -->
+			<integer name="sampleCount" value="1"/>
+		</sampler>
+
+		<film type="hdrfilm">
+			<integer name="width" value="1280"/>
+			<integer name="height" value="720"/>
+
+			<!-- <rfilter type="gaussian"/> -->
+			<rfilter type="box"/>
+			<boolean name="banner" value="false"/>
+		</film>
+	</sensor>
+
+	<emitter type="envmap">
+		<string name="filename" value="hdrs/sky.hdr"/>
+	</emitter>
+
+	<shape type="sphere">
+		<point name="center" x="0" y="0" z="0"/>
+		<float name="radius" value="1"/>
+		<bsdf type="diffuse">
+			<rgb name="reflectance" value="1.0, 1.0, 1.0"/>
+		</bsdf>
+  </shape>
+</scene>
