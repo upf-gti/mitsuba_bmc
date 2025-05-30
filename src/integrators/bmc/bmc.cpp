@@ -49,6 +49,20 @@ Vector3 random_on_hemisphere() {
     }
 }
 
+// Converts the vector in the space of the intersection coordinates (the normal is the up vector)
+Vector3 to_world(Intersection& its, Vector3 v) {
+    Vector3 s = its.geoFrame.s;
+    Vector3 n = its.geoFrame.n;
+    Vector3 t = its.geoFrame.t;
+    //return s * v.x + t * v.y + n * v.z;
+    Vector3 result(
+        s.x * v.x + n.x * v.y + t.x * v.z,
+        s.y * v.x + n.y * v.y + t.y * v.z,
+        s.z * v.x + n.z * v.y + t.z * v.z
+    );
+    return normalize(result);
+}
+
 class BMCIntegrator : public SamplingIntegrator {
 public:
     // Initialize the integrator with the specified properties
@@ -81,6 +95,9 @@ public:
         if (!scene->rayIntersect(ray, its)) {
             return scene->evalEnvironment(ray);
         }
+
+        // TODO
+        // ..
 
         return L_out;
     }
@@ -117,27 +134,28 @@ public:
             // Rotate to get different directions each sample (with same covariance matrix)
             Vector3 wo2 = rotate_around_y(wo, alpha);
             // Rotate to align hemisphere directions to intersection normal
-            Vector3 wo3 = normalize(its.toWorld(wo2));
+            Vector3 wo3 = normalize(its.toWorld(wo2)); // NOT WORKING
+            Vector3 wo4 = to_world(its, wo2);
 
             // Evaluate BSDF at surface for sampled direction
             //Vector3 fcos = its_ctx.shape->material->evaluateBSDF(its_ctx.normal, wo, wi) * abs(dot(its_ctx.normal, wi));
-            BSDFSamplingRecord bRec(its, -ray.d, wo3, ERadiance);
+            BSDFSamplingRecord bRec(its, -ray.d, wo4, ERadiance);
             // Evaluate BSDF at surface for sampled direction
             Spectrum bsdf_value = bsdf->sample(bRec, rRec.nextSample2D());
-            bRec.wo = wo3;
+            bRec.wo = wo4;
 
             // Recursively trace ray to estimate incident radiance at surface
-            RayDifferential secondaryRay(its.p, its.geoFrame.n, ray.time);
+            RayDifferential secondaryRay(its.p, wo4, ray.time);
             rRec.depth++;
 
             // In this basic example, with only 1 depth (light from environment), store each color retrieved from every direction in an array
-            radiance_samples.push_back(Li_recursive(secondaryRay, rRec));// *bsdf_value);
+            radiance_samples.push_back(Li_recursive(secondaryRay, rRec) * bsdf_value);
         }
 
         // and use this array to compute the final radiance
         L_out = bmc->compute_integral(radiance_samples);
 
-        return radiance_samples[0];
+        return L_out; // TODO: Add Le
    }
 
     // Preprocess function -- called on the initiating machine
