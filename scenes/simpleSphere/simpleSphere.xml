@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <scene version="0.6.0">
-	<integrator type="bmc"> <!-- "bmc"> --> <!-- "path"> -->
+	<integrator type="bmc">
 		<rgb name="color" value="0.0, 0.0, 0.0"/>
 		<integer name="maxDepth" value="2"/>
 	</integrator>
@@ -20,6 +20,12 @@
 		<film type="hdrfilm">
 			<integer name="width" value="1280"/>
 			<integer name="height" value="720"/>
+
+			<!-- Debug stuff -->
+			<!--<integer name="cropOffsetX" value="640"/>
+			<integer name="cropOffsetY" value="360"/>
+			<integer name="cropWidth" value="1"/>
+			<integer name="cropHeight" value="1"/>-->
 
 			<!-- <rfilter type="gaussian"/> -->
 			<rfilter type="box"/>

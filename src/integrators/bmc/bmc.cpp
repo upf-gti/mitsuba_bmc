@@ -7,7 +7,7 @@
 
 MTS_NAMESPACE_BEGIN
 
-// Rotate a sample arround Y by a random angle
+// Rotate a sample around Y by a random angle
 Vector3 rotate_around_y(Vector3 dir, Float alpha) {
     Float sin_alpha = sin(alpha);
     Float cos_alpha = cos(alpha);
@@ -15,6 +15,17 @@ Vector3 rotate_around_y(Vector3 dir, Float alpha) {
         dir.x * cos_alpha + dir.z * sin_alpha,
         dir.y,
         -dir.x * sin_alpha + dir.z * cos_alpha
+    );
+}
+
+// Rotate a sample around Z by a random angle
+Vector3 rotate_around_z(Vector3 dir, Float alpha) {
+    Float sin_alpha = sin(alpha);
+    Float cos_alpha = cos(alpha);
+    return Vector3(
+        dir.x * cos_alpha - dir.y * sin_alpha,
+        dir.x * sin_alpha + dir.y * cos_alpha,
+        dir.z
     );
 }
 
@@ -37,9 +48,9 @@ Vector3 random_unit_vector() {
     }
 }
 
-// Get random vector on an hemishpere facing the Y axis
+// Get random vector on an hemishpere facing the Z axis
 Vector3 random_on_hemisphere() {
-    Vector3 normal = Vector3(0.0, 1.0, 0.0);
+    Vector3 normal = Vector3(0.0, 0.0, 1.0);
     Vector3 on_unit_sphere = random_unit_vector();
     if (dot(on_unit_sphere, normal) > 0.0) { // In the same hemisphere as the normal
         return on_unit_sphere;
@@ -49,113 +60,160 @@ Vector3 random_on_hemisphere() {
     }
 }
 
-// Converts the vector in the space of the intersection coordinates (the normal is the up vector)
-Vector3 to_world(Intersection& its, Vector3 v) {
-    Vector3 s = its.geoFrame.s;
-    Vector3 n = its.geoFrame.n;
-    Vector3 t = its.geoFrame.t;
-    //return s * v.x + t * v.y + n * v.z;
-    Vector3 result(
-        s.x * v.x + n.x * v.y + t.x * v.z,
-        s.y * v.x + n.y * v.y + t.y * v.z,
-        s.z * v.x + n.z * v.y + t.z * v.z
-    );
-    return normalize(result);
-}
-
 class BMCIntegrator : public SamplingIntegrator {
 public:
     // Initialize the integrator with the specified properties
     BMCIntegrator(const Properties &props) : SamplingIntegrator(props) {
-        Spectrum defaultColor;
-        defaultColor.fromLinearRGB(0.0, 0.0, 0.0);
-        m_color = props.getSpectrum("color", defaultColor);
         m_maxDepth = props.getInteger("maxDepth", 1);
     }
 
     // Unserialize from a binary data stream
     BMCIntegrator(Stream *stream, InstanceManager *manager) : SamplingIntegrator(stream, manager) {
-        m_color = Spectrum(stream);
         m_maxDepth = stream->readInt();
     }
 
     // Serialize to a binary data stream
     void serialize(Stream *stream, InstanceManager *manager) const {
         SamplingIntegrator::serialize(stream, manager);
-        m_color.serialize(stream);
         stream->writeInt(m_maxDepth);
     }
 
+    // Auxiliar radiance computation function only for the indirect component
     Spectrum Li_recursive(const RayDifferential& r, RadianceQueryRecord& rRec) const {
         const Scene* scene = rRec.scene;
         Intersection& its = rRec.its;
         RayDifferential ray(r);
-        Spectrum L_out(0.0);
+        Spectrum Li(0.0);
 
+        // If there is not intersection, return the environment
         if (!scene->rayIntersect(ray, its)) {
             return scene->evalEnvironment(ray);
         }
 
-        // TODO
-        // ..
+        // Check if the path length have surpassed the limit of bounces
+        if (rRec.depth > m_maxDepth && m_maxDepth > 0) {
+            return Li;
+        }
 
-        return L_out;
+        // Pick a random BMC Gaussian Process
+        uint32_t randomGP = rand() % numBMCs;
+        BMC<Vector3, Spectrum>* bmc = bmcList[randomGP];
+
+        // Store the radiance of each random direction
+        std::vector<Spectrum> radianceSamples;
+
+        // Random angle to rotate the GP directions
+        Float alpha = 2.0 * M_PI * rand() / (Float)RAND_MAX;
+
+        // Get surface properties
+        const BSDF* bsdf = its.getBSDF(ray);
+
+        // Loop for each random directions computed in the preprocess step
+        for (uint32_t sIdx = 0; sIdx < numShadingSamples; sIdx++) {
+            Vector3 wo = bmc->get_gaussian_process()->get_observation(sIdx);
+            // Rotate to get different directions each sample/pixel/intersection (with same covariance matrix)
+            Vector3 woLocal = rotate_around_z(wo, alpha);
+            // Rotate to align hemisphere directions to intersection normal
+            Vector3 wiLocal = normalize(its.toLocal(-ray.d));
+
+            // Evaluate BSDF at surface for sampled direction
+            BSDFSamplingRecord bRec(its, wiLocal, woLocal, ERadiance);
+            Spectrum bsdfVal = bsdf->eval(bRec); // reflectance * cosine term
+
+            // Recursively trace ray to estimate incident radiance at surface
+            Vector3 woWorld = normalize(its.toWorld(woLocal));
+            RayDifferential nextRay(its.p, woWorld, ray.time);
+            rRec.depth++;
+
+            // Store each color retrieved from every direction in an array
+            radianceSamples.push_back(Li_recursive(nextRay, rRec) * bsdfVal);
+        }
+
+        // and use this array to compute the final radiance
+        Li += bmc->compute_integral(radianceSamples);
+
+        return Li;
     }
 
     // Radiance computation function
+    /*
+        wi refers to the vector comming from the camera
+        wo refers to the reflecting vector
+        all vectors should point away from the intersection
+    */
     Spectrum Li(const RayDifferential &r, RadianceQueryRecord &rRec) const {
         const Scene *scene = rRec.scene;
         Intersection &its = rRec.its;
         RayDifferential ray(r);
-        Spectrum L_out(0.0);
+        Spectrum Li(0.0);
 
+        // If there is not intersection, return the environment
         if (!scene->rayIntersect(ray, its)) {
             return scene->evalEnvironment(ray);
         }
 
-        // Check if the path length have surpassed the maxDepth
-        /* if (rRec.depth >= m_maxDepth && m_maxDepth > 0) {
-            return L_out;
-        }*/
+        // Check if the path length have surpassed the limit of bounces
+        if (rRec.depth > m_maxDepth && m_maxDepth > 0) {
+            return Li;
+        }
+
+        /* ==================================================================== */
+        /*                          Emissive radiance                           */
+        /* ==================================================================== */
+
+        if (its.isEmitter()) {
+            Li += its.Le(-ray.d);
+        }
+
+        /* ==================================================================== */
+        /*                          Direct radiance                             */
+        /* ==================================================================== */
+
+        // TODO
+        // ..
+
+        /* ==================================================================== */
+        /*                          Indirect radiance                           */
+        /* ==================================================================== */
 
         // Pick a random BMC Gaussian Process
-        uint32_t random_gp = rand() % num_bmcs;
-        BMC<Vector3, Spectrum>* bmc = bmc_list[random_gp];
+        uint32_t randomGP = rand() % numBMCs;
+        BMC<Vector3, Spectrum>* bmc = bmcList[randomGP];
 
+        // Store the radiance of each random direction
+        std::vector<Spectrum> radianceSamples;
+
+        // Random angle to rotate the GP directions
         Float alpha = 2.0 * M_PI * rand() / (Float)RAND_MAX;
 
+        // Get surface properties
         const BSDF *bsdf = its.getBSDF(ray);
-        DirectSamplingRecord dRec(its);
-        std::vector<Spectrum> radiance_samples;
 
-        for (uint32_t s_idx = 0; s_idx < num_shading_samples; s_idx++) {
-            // In computeColor use the previously stored directions in GP to define the reflected ray directions
-            Vector3 wo = bmc->get_gaussian_process()->get_observation(s_idx);
-            // Rotate to get different directions each sample (with same covariance matrix)
-            Vector3 wo2 = rotate_around_y(wo, alpha);
+        // Loop for each random directions computed in the preprocess step
+        for (uint32_t sIdx = 0; sIdx < numShadingSamples; sIdx++) {
+            Vector3 wo = bmc->get_gaussian_process()->get_observation(sIdx);
+            // Rotate to get different directions each sample/pixel/intersection (with same covariance matrix)
+            Vector3 woLocal = rotate_around_z(wo, alpha);
             // Rotate to align hemisphere directions to intersection normal
-            Vector3 wo3 = normalize(its.toWorld(wo2)); // NOT WORKING
-            Vector3 wo4 = to_world(its, wo2);
+            Vector3 wiLocal = normalize(its.toLocal(-ray.d));
 
             // Evaluate BSDF at surface for sampled direction
-            //Vector3 fcos = its_ctx.shape->material->evaluateBSDF(its_ctx.normal, wo, wi) * abs(dot(its_ctx.normal, wi));
-            BSDFSamplingRecord bRec(its, -ray.d, wo4, ERadiance);
-            // Evaluate BSDF at surface for sampled direction
-            Spectrum bsdf_value = bsdf->sample(bRec, rRec.nextSample2D());
-            bRec.wo = wo4;
+            BSDFSamplingRecord bRec(its, wiLocal, woLocal, ERadiance);
+            Spectrum bsdfVal = bsdf->eval(bRec); // reflectance * cosine term
 
             // Recursively trace ray to estimate incident radiance at surface
-            RayDifferential secondaryRay(its.p, wo4, ray.time);
+            Vector3 woWorld = normalize(its.toWorld(woLocal));
+            RayDifferential nextRay(its.p, woWorld, ray.time);
             rRec.depth++;
 
-            // In this basic example, with only 1 depth (light from environment), store each color retrieved from every direction in an array
-            radiance_samples.push_back(Li_recursive(secondaryRay, rRec) * bsdf_value);
+            // Store each color retrieved from every direction in an array
+            radianceSamples.push_back(Li_recursive(nextRay, rRec) * bsdfVal);
         }
 
         // and use this array to compute the final radiance
-        L_out = bmc->compute_integral(radiance_samples);
+        Li += bmc->compute_integral(radianceSamples);
 
-        return L_out; // TODO: Add Le
+        return Li;
    }
 
     // Preprocess function -- called on the initiating machine
@@ -163,30 +221,30 @@ public:
         SamplingIntegrator::preprocess(scene, queue, job, sceneResID, cameraResID, samplerResID);
 
         // Create multiple Gaussian Process (GP) instances to have way more sampling directions mantaining performance
-        bmc_list.resize(num_bmcs);
+        bmcList.resize(numBMCs);
 
-        for (uint32_t i = 0; i < num_bmcs; ++i) {
-            mitsuba_kernel::sSobolevParams sobolev_params;
-            sobolev_params.s = 1.5;
+        for (uint32_t i = 0; i < numBMCs; ++i) {
+            mitsuba_kernel::sSobolevParams sobolevParams;
+            sobolevParams.s = 1.5;
 
-            GaussianProcess<Vector3, Spectrum>* gaussian_process = new GaussianProcess<Vector3, Spectrum>(mitsuba_kernel::sobolev, &sobolev_params, sizeof(mitsuba_kernel::sSobolevParams), 0.01);
+            GaussianProcess<Vector3, Spectrum>* gaussianProcess = new GaussianProcess<Vector3, Spectrum>(mitsuba_kernel::sobolev, &sobolevParams, sizeof(mitsuba_kernel::sSobolevParams), 0.01);
 
-            // Set x number of samples (observation/training points), in our case directions
-            std::vector<Vector3> sample_directions;
-            sample_directions.reserve(num_shading_samples);
+            // Set N number of samples (observation/training points), in our case directions
+            std::vector<Vector3> sampleDirections;
+            sampleDirections.reserve(numShadingSamples);
 
             // Victor's birth year plus offset :)
             srand(1998 + i);
 
-            // Generate x random directions in sphere and store in array
-            for (uint32_t s_idx = 0; s_idx < num_shading_samples; s_idx++) {
-                sample_directions.push_back(random_on_hemisphere());
+            // Generate and store N random directions in the hemisphere
+            for (uint32_t i = 0; i < numShadingSamples; i++) {
+                sampleDirections.push_back(random_on_hemisphere());
             }
 
             // Fill the GP instance with the array of directions (observation points)
-            gaussian_process->set_observations(sample_directions, {});
+            gaussianProcess->set_observations(sampleDirections, {});
 
-            bmc_list[i] = new BMC<Vector3, Spectrum>(random_on_hemisphere, gaussian_process);
+            bmcList[i] = new BMC<Vector3, Spectrum>(random_on_hemisphere, gaussianProcess);
         }
 
         return true;
@@ -195,16 +253,15 @@ public:
     MTS_DECLARE_CLASS()
 
 private:
-    Spectrum m_color;
     uint32_t m_maxDepth;
 
-    std::vector<BMC<Vector, Spectrum>*> bmc_list;
-    uint32_t num_bmcs = 1;
+    std::vector<BMC<Vector, Spectrum>*> bmcList;
+    uint32_t numBMCs = 1;
     // Number of cached sample directions in the hemisphere
-    uint32_t num_shading_samples = 10;
+    uint32_t numShadingSamples = 10;
 };
 
 MTS_IMPLEMENT_CLASS_S(BMCIntegrator, false, SamplingIntegrator)
-MTS_EXPORT_PLUGIN(BMCIntegrator, "A contrived integrator");
+MTS_EXPORT_PLUGIN(BMCIntegrator, "Bayesian Monte Carlo integrator");
 
 MTS_NAMESPACE_END
