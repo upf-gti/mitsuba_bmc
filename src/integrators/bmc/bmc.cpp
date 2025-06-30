@@ -130,7 +130,9 @@ public:
         }
 
         // and use this array to compute the final radiance
-        Li += bmc->compute_integral(radianceSamples);
+        Spectrum Li_ind(0.0);
+        bmc->compute_integral(radianceSamples, Li_ind);
+        Li += Li_ind;
 
         return Li;
     }
@@ -211,7 +213,9 @@ public:
         }
 
         // and use this array to compute the final radiance
-        Li += bmc->compute_integral(radianceSamples);
+        Spectrum Li_ind(0.0);
+        bmc->compute_integral(radianceSamples, Li_ind);
+        Li += Li_ind;
 
         return Li;
    }
@@ -258,7 +262,7 @@ private:
     std::vector<BMC<Vector, Spectrum>*> bmcList;
     uint32_t numBMCs = 1;
     // Number of cached sample directions in the hemisphere
-    uint32_t numShadingSamples = 10;
+    uint32_t numShadingSamples = 200;
 };
 
 MTS_IMPLEMENT_CLASS_S(BMCIntegrator, false, SamplingIntegrator)

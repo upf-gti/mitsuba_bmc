@@ -13,7 +13,7 @@
 		<float name="fov" value="60"/>
 		<string name="fovAxis" value="y"/>
 
-		<sampler type="independent"> <!-- TODO: locate the sample at the middle -->
+		<sampler type="independent">
 			<integer name="sampleCount" value="1"/>
 		</sampler>
 
@@ -22,6 +22,7 @@
 			<integer name="height" value="720"/>
 
 			<!-- Debug stuff -->
+			<!-- Render with 1 thread: "-t 1" in the command line -->
 			<!--<integer name="cropOffsetX" value="640"/>
 			<integer name="cropOffsetY" value="360"/>
 			<integer name="cropWidth" value="1"/>
